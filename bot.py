@@ -183,11 +183,12 @@ MORNING_TIME = time(hour=7, minute=0, tzinfo=JST)  # 毎朝 7:00 JST
 
 
 # ── フィードチェック共通処理 ──────────────────────────────
-async def _check_feeds(channel, feeds: list[dict], max_per_feed: int | None = None) -> int:
+async def _check_feeds(channel, feeds: list[dict], max_per_feed: int | None = None, shuffle: bool = False) -> int:
     """指定されたフィード一覧をチェックし新着記事を投稿する。投稿件数を返す。
 
     Args:
         max_per_feed: 1フィードあたりの最大投稿件数。None の場合は無制限。
+        shuffle: True の場合、新着記事をランダムに並び替えて投稿する。
     """
     seen = load_seen()
     new_count = 0
@@ -210,6 +211,11 @@ async def _check_feeds(channel, feeds: list[dict], max_per_feed: int | None = No
                 aid = article_id(entry)
                 if aid not in seen[feed_name]:
                     new_entries.append((aid, entry))
+
+            # ランダム取得の場合はシャッフル
+            if shuffle:
+                import random
+                random.shuffle(new_entries)
 
             # 初回起動時は最新5件だけ投稿（大量投稿防止）
             init_limit = max_per_feed if max_per_feed is not None else 5
@@ -295,11 +301,14 @@ async def before_morning_news():
 # ── コマンド ──────────────────────────────────────────────
 @bot.command(name="news")
 async def cmd_news(ctx):
-    """手動で最新記事を取得して投稿する"""
+    """手動で最新記事をランダムに取得して投稿する"""
     await ctx.send("🔄 フィードをチェック中…")
     channel = ctx.channel
-    await _check_feeds(channel, MORNING_FEEDS, max_per_feed=3)
-    await ctx.send("✅ チェック完了！")
+    new_count = await _check_feeds(channel, MORNING_FEEDS, max_per_feed=5, shuffle=True)
+    if new_count == 0:
+        await ctx.send("⚠️ 新着記事がありません（既読済み）")
+    else:
+        await ctx.send(f"✅ {new_count} 件の記事を投稿しました！")
 
 
 @bot.command(name="status")
