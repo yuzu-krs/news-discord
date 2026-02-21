@@ -263,7 +263,13 @@ async def on_ready():
     print(f"\u2705 ログイン完了: {bot.user} (ID: {bot.user.id})")
     print(f"📡 チャンネルID: {CHANNEL_ID}")
     print(f"🌅 朝のニュース: 毎日 {MORNING_TIME.strftime('%H:%M')} JST")
-
+    # 起動時に朝のニュースを投稿
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
+        print("📰 起動時のニュースを投稿中...")
+        await _post_morning_news(channel)
+    else:
+        print(f"[ERROR] チャンネル {CHANNEL_ID} が見つかりません")
     if not morning_news.is_running():
         morning_news.start()
         print("✅ morning_news タスク開始")
