@@ -264,14 +264,9 @@ async def on_ready():
     print(f"📡 チャンネルID: {CHANNEL_ID}")
     print(f"🌅 朝のニュース: 毎日 {MORNING_TIME.strftime('%H:%M')} JST")
 
-    # 起動時に即座実行
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel:
-        print("🔄 起動時チェックを実行中…")
-        await _post_morning_news(channel)
-
     if not morning_news.is_running():
         morning_news.start()
+        print("✅ morning_news タスク開始")
 
 
 # ── 朝の定時ニュース (Qiita / Zenn / GIGAZINE) ───────────
@@ -296,6 +291,17 @@ async def morning_news():
 @morning_news.before_loop
 async def before_morning_news():
     await bot.wait_until_ready()
+
+
+@morning_news.error
+async def morning_news_error(error):
+    now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{now}] ❌ morning_news エラー: {error}")
+    import traceback
+    traceback.print_exc()
+    # タスクが停止した場合は再起動
+    if not morning_news.is_running():
+        morning_news.restart()
 
 
 # ── コマンド ──────────────────────────────────────────────
@@ -329,7 +335,7 @@ async def cmd_status(ctx):
         value=f"{CHECK_INTERVAL_MINUTES} 分",
         inline=False,
     )
-    embed.set_footer(text=f"次回チェック: check_feeds タスク稼働中={'✅' if check_feeds.is_running() else '❌'}")
+    embed.set_footer(text=f"morning_news タスク稼働中={'✅' if morning_news.is_running() else '❌'}")
     await ctx.send(embed=embed)
 
 
