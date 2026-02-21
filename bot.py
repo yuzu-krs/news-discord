@@ -179,7 +179,7 @@ def make_embed(entry: dict, feed_meta: dict) -> discord.Embed:
 # ── 朝のフィード定義 ──────────────────────────────────────
 MORNING_FEED_NAMES = {"Qiita トレンド", "Zenn トレンド", "GIGAZINE"}
 MORNING_FEEDS = [f for f in RSS_FEEDS if f["name"] in MORNING_FEED_NAMES]
-MORNING_TIME = datetime.time(hour=7, minute=0, tzinfo=JST)  # 毎朝 7:00 JST
+MORNING_TIME = time(hour=7, minute=0, tzinfo=JST)  # 毎朝 7:00 JST
 
 
 # ── フィードチェック共通処理 ──────────────────────────────
