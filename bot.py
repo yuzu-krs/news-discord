@@ -264,36 +264,102 @@ async def _check_feeds(channel, feeds: list[dict], max_per_feed: int | None = No
     return new_count
 
 
-# ── Bot 本体 ──────────────────────────────────────────────
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+# ── 朝ニュース用: 記事を収集する（投稿なし） ───────────────────
+async def _collect_morning_articles(max_per_feed: int = 2) -> tuple[list[tuple], dict]:
+    """朝のフィードから新着記事を収集し、(feed_meta, entries)のリストとupdated seenを返す。"""
+    seen = load_seen()
+    results: list[tuple[dict, list[tuple[str, dict]]]] = []
 
+    async with aiohttp.ClientSession() as session:
+        for feed_meta in MORNING_FEEDS:
+            feed_name = feed_meta["name"]
+            feed = await fetch_feed(session, feed_meta["url"])
 
-@bot.event
-async def on_ready():
-    print(f"\u2705 ログイン完了: {bot.user} (ID: {bot.user.id})")
-    print(f"📡 チャンネルID: {CHANNEL_ID}")
-    print(f"🌅 朝のニュース: 毎日 {MORNING_TIME.strftime('%H:%M')} JST")
-    # 起動時に朝のニュースを投稿
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel:
-        print("📰 起動時のニュースを投稿中...")
-        await _post_morning_news(channel)
-    else:
-        print(f"[ERROR] チャンネル {CHANNEL_ID} が見つかりません")
-    if not morning_news.is_running():
-        morning_news.start()
-        print("✅ morning_news タスク開始")
+            if not feed or not feed.get("entries"):
+                print(f"[WARN] {feed_name}: エントリなし")
+                continue
+
+            if feed_name not in seen:
+                seen[feed_name] = []
+
+            allowed_categories = feed_meta.get("categories")
+
+            new_entries = []
+            for entry in feed.entries:
+                if allowed_categories:
+                    entry_cats = {t.get("term", "") for t in entry.get("tags", [])}
+                    if not entry_cats & allowed_categories:
+                        continue
+                aid = article_id(entry)
+                if aid not in seen[feed_name]:
+                    new_entries.append((aid, entry))
+
+            # 初回起動時は最新件のみ（大量投稿防止）
+            if not seen[feed_name] and len(new_entries) > max_per_feed:
+                for aid, _ in new_entries[:-max_per_feed]:
+                    seen[feed_name].append(aid)
+                new_entries = new_entries[-max_per_feed:]
+
+            if len(new_entries) > max_per_feed:
+                for aid, _ in new_entries[:-max_per_feed]:
+                    seen[feed_name].append(aid)
+                new_entries = new_entries[-max_per_feed:]
+
+            # 既読に追加
+            for aid, _ in new_entries:
+                seen[feed_name].append(aid)
+
+            if len(seen[feed_name]) > 500:
+                seen[feed_name] = seen[feed_name][-300:]
+
+            if new_entries:
+                results.append((feed_meta, new_entries))
+
+    save_seen(seen)
+    return results
 
 
 # ── 朝の定時ニュース (Qiita / Zenn / GIGAZINE) ───────────
 async def _post_morning_news(channel) -> None:
-    """朝のテックニュースを投稿する共通処理"""
-    await channel.send("☀️ **おはようございます！朝のテックニュースをお届けします**")
-    new_count = await _check_feeds(channel, MORNING_FEEDS, max_per_feed=2)
+    """朝のテックニュースを1メッセージにまとめて投稿する"""
+    results = await _collect_morning_articles(max_per_feed=2)
+
+    if not results:
+        now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{now}] 🌅 朝のニュース: 新着なし")
+        return
+
+    today = datetime.now(JST).strftime("%Y年%-m月%-d日")
+    embed = discord.Embed(
+        title=f"☀️ {today}の朝のテックニュース",
+        color=0x5865F2,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    total = 0
+    for feed_meta, entries in results:
+        lines = []
+        for _, entry in entries:
+            title = entry.get("title", "タイトルなし")
+            link = entry.get("link", "")
+            lines.append(f"[🔗 {title}]({link})")
+            total += 1
+        embed.add_field(
+            name=feed_meta["name"],
+            value="\n".join(lines),
+            inline=False,
+        )
+
+    embed.set_footer(text=f"計 {total} 件 | 毎朝 7:00 JST 配信")
+
+    try:
+        await channel.send(embed=embed)
+    except discord.HTTPException as e:
+        print(f"[ERROR] 朝ニュース送信失敗: {e}")
+        return
+
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now}] 🌅 朝のニュースチェック完了 - 新着 {new_count} 件投稿")
+    print(f"[{now}] 🌅 朝のニュースチェック完了 - 新着 {total} 件をまとめて投稿")
 
 
 @tasks.loop(time=MORNING_TIME)
