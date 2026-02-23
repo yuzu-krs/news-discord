@@ -84,6 +84,8 @@ RSS_FEEDS = [
         "url": "https://gigazine.net/news/rss_2.0/",
         "color": 0x333333,   # GIGAZINE ブラック
         "icon": "https://gigazine.net/favicon.ico",
+        # dc:subject でIT系カテゴリのみに絞る
+        "categories": {"AI", "ソフトウェア", "ハードウェア", "セキュリティ", "ネットサービス", "ウェブアプリ"},
     },
 ]
 
@@ -205,9 +207,19 @@ async def _check_feeds(channel, feeds: list[dict], max_per_feed: int | None = No
             if feed_name not in seen:
                 seen[feed_name] = []
 
+            # カテゴリフィルター（feedメタに"categories"が指定されている場合のみ絞り込む）
+            allowed_categories = feed_meta.get("categories")
+
             # 新着を古い順に並べて投稿
             new_entries = []
             for entry in feed.entries:
+                # カテゴリフィルタリング
+                if allowed_categories:
+                    subject = entry.get("tags", [])
+                    # feedparserはdc:subjectをtagsに格納する
+                    entry_cats = {t.get("term", "") for t in subject}
+                    if not entry_cats & allowed_categories:
+                        continue
                 aid = article_id(entry)
                 if aid not in seen[feed_name]:
                     new_entries.append((aid, entry))
@@ -279,7 +291,7 @@ async def on_ready():
 async def _post_morning_news(channel) -> None:
     """朝のテックニュースを投稿する共通処理"""
     await channel.send("☀️ **おはようございます！朝のテックニュースをお届けします**")
-    new_count = await _check_feeds(channel, MORNING_FEEDS, max_per_feed=5)
+    new_count = await _check_feeds(channel, MORNING_FEEDS, max_per_feed=2)
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now}] 🌅 朝のニュースチェック完了 - 新着 {new_count} 件投稿")
 
