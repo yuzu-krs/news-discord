@@ -369,12 +369,14 @@ async def _post_morning_news(channel) -> None:
 
     # 今日の注目1本をdescriptionに入れる
     spotlight = pick_spotlight(results)
+    spotlight_link = ""
     description = ""
     if spotlight:
         sp_feed, sp_entry = spotlight
         sp_title = sp_entry.get("title", "タイトルなし")
         sp_link  = sp_entry.get("link", "")
-        description = f"⭐ **今日の注目**\n[🔗 {sp_title}]({sp_link})\n\n───"
+        spotlight_link = sp_link
+        description = f"⭐ **今日の注目**\n[🔗 {sp_title}]({sp_link})\n\n━━━━━━━━"
 
     embed = discord.Embed(
         title=f"☀️ {today}の朝のテックニュース",
@@ -387,12 +389,17 @@ async def _post_morning_news(channel) -> None:
     for feed_meta, entries in results:
         lines = []
         for _, entry in entries:
-            title = entry.get("title", "タイトルなし")
             link = entry.get("link", "")
+            # 注目記事と同じURLはフィード一覧から除外（重複防止）
+            if spotlight_link and link == spotlight_link:
+                continue
+            title = entry.get("title", "タイトルなし")
             lines.append(f"[🔗 {title}]({link})")
             total += 1
+        if not lines:
+            continue
         embed.add_field(
-            name=feed_meta["name"],
+            name=f"\n{feed_meta['name']}",
             value="\n".join(lines),
             inline=False,
         )
