@@ -357,7 +357,7 @@ async def _collect_morning_articles(max_per_feed: int = 2) -> tuple[list[tuple],
 
 # ── 朝の定時ニュース (Qiita / Zenn / GIGAZINE) ───────────
 async def _post_morning_news(channel) -> None:
-    """朝のテックニュースを1メッセージにまとめて投稿する"""
+    """朝のテックニュースを1つのEmbedにまとめて投稿する"""
     results = await _collect_morning_articles(max_per_feed=2)
 
     if not results:
@@ -366,8 +366,19 @@ async def _post_morning_news(channel) -> None:
         return
 
     today = datetime.now(JST).strftime("%Y年%-m月%-d日")
+
+    # 今日の注目1本をdescriptionに入れる
+    spotlight = pick_spotlight(results)
+    description = ""
+    if spotlight:
+        sp_feed, sp_entry = spotlight
+        sp_title = sp_entry.get("title", "タイトルなし")
+        sp_link  = sp_entry.get("link", "")
+        description = f"⭐ **今日の注目**\n[🔗 {sp_title}]({sp_link})\n\n───"
+
     embed = discord.Embed(
         title=f"☀️ {today}の朝のテックニュース",
+        description=description if description else None,
         color=0x5865F2,
         timestamp=datetime.now(timezone.utc),
     )
@@ -393,30 +404,6 @@ async def _post_morning_news(channel) -> None:
     except discord.HTTPException as e:
         print(f"[ERROR] 朝ニュース送信失敗: {e}")
         return
-
-    # ── 今日の注目1本 ──
-    spotlight = pick_spotlight(results)
-    if spotlight:
-        sp_feed, sp_entry = spotlight
-        sp_title = sp_entry.get("title", "タイトルなし")
-        sp_link  = sp_entry.get("link", "")
-        sp_summary = sp_entry.get("summary", sp_entry.get("description", ""))
-        import re
-        sp_summary = re.sub(r"<[^>]+>", "", sp_summary)
-        if len(sp_summary) > 300:
-            sp_summary = sp_summary[:300] + "…"
-        sp_embed = discord.Embed(
-            title=f"⭐ 今日の注目: {sp_title}",
-            url=sp_link,
-            description=sp_summary if sp_summary else None,
-            color=0xFFD700,
-            timestamp=datetime.now(timezone.utc),
-        )
-        sp_embed.set_footer(text=f"{sp_feed['name']} | AI・キーワードスコアリングによる自動選出")
-        try:
-            await channel.send(embed=sp_embed)
-        except discord.HTTPException:
-            pass
 
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now}] 🌅 朝のニュースチェック完了 - 新着 {total} 件をまとめて投稿")
