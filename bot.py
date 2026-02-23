@@ -252,8 +252,11 @@ async def _check_feeds(channel, feeds: list[dict], max_per_feed: int | None = No
                 # カテゴリフィルタリング
                 if allowed_categories:
                     subject = entry.get("tags", [])
-                    # feedparserはdc:subjectをtagsに格納する
-                    entry_cats = {t.get("term", "") for t in subject}
+                    # feedparserはdc:subjectをtagsに格納する（カンマ区切り文字列の場合あり）
+                    entry_cats = set()
+                    for t in subject:
+                        for part in t.get("term", "").split(","):
+                            entry_cats.add(part.strip())
                     if not entry_cats & allowed_categories:
                         continue
                 aid = article_id(entry)
@@ -323,7 +326,10 @@ async def _collect_morning_articles(max_per_feed: int = 2) -> tuple[list[tuple],
             new_entries = []
             for entry in feed.entries:
                 if allowed_categories:
-                    entry_cats = {t.get("term", "") for t in entry.get("tags", [])}
+                    entry_cats = set()
+                    for t in entry.get("tags", []):
+                        for part in t.get("term", "").split(","):
+                            entry_cats.add(part.strip())
                     if not entry_cats & allowed_categories:
                         continue
                 aid = article_id(entry)
@@ -365,7 +371,7 @@ async def _post_morning_news(channel) -> None:
         print(f"[{now}] 🌅 朝のニュース: 新着なし")
         return
 
-    today = datetime.now(JST).strftime("%Y年%-m月%-d日")
+    today = datetime.now(JST).strftime("%Y/%m/%d")
 
     # 今日の注目1本をdescriptionに入れる
     spotlight = pick_spotlight(results)
@@ -379,7 +385,7 @@ async def _post_morning_news(channel) -> None:
         description = f"⭐ **今日の注目**\n[🔗 {sp_title}]({sp_link})\n\n━━━━━━━━"
 
     embed = discord.Embed(
-        title=f"☀️ {today}の朝のテックニュース",
+        title=f"☀️ {today} 朝のテックニュース",
         description=description if description else None,
         color=0x5865F2,
         timestamp=datetime.now(timezone.utc),
