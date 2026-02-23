@@ -181,7 +181,43 @@ def make_embed(entry: dict, feed_meta: dict) -> discord.Embed:
 # ── 朝のフィード定義 ──────────────────────────────────────
 MORNING_FEED_NAMES = {"Qiita トレンド", "Zenn トレンド", "GIGAZINE"}
 MORNING_FEEDS = [f for f in RSS_FEEDS if f["name"] in MORNING_FEED_NAMES]
-MORNING_TIME = time(hour=7, minute=0, tzinfo=JST)  # 毎朝 7:00 JST
+MORNING_TIME = time(hour=7, minute=0, tzinfo=JST)   # 毎朝 7:00 JST
+WEEKLY_TIME  = time(hour=9, minute=0, tzinfo=JST)   # 毎週日曜 9:00 JST
+
+# ── ホットキーワードスコアリング ───────────────────────────
+HOT_KEYWORDS = [
+    "AI", "ChatGPT", "GPT", "LLM", "生成AI", "Claude", "Gemini", "エージェント",
+    "セキュリティ", "脆弱性", "ゼロデイ", "サイバー攻撃",
+    "TypeScript", "Python", "Rust", "React", "Next.js", "Vue", "Go",
+    "クラウド", "AWS", "Azure", "GCP", "Kubernetes", "Docker",
+    "GitHub", "OSS", "オープンソース",
+    "スタートアップ", "資金調達", "割悹",
+]
+
+
+def score_entry(entry: dict, feed_meta: dict) -> int:
+    """タイトルのホットキーワード数 + フィードボーナスでスコアを返す"""
+    title = entry.get("title", "")
+    score = sum(1 for kw in HOT_KEYWORDS if kw.lower() in title.lower())
+    # Qiita/Zennはエンジニア向け特化なのでボーナス
+    if feed_meta["name"] in ("Qiita トレンド", "Zenn トレンド"):
+        score += 1
+    return score
+
+
+def pick_spotlight(
+    results: list[tuple[dict, list[tuple[str, dict]]]],
+) -> tuple[dict, dict] | None:
+    """収集記事の中から最高スコアの1本を返す"""
+    best: tuple[int, dict, dict] | None = None
+    for feed_meta, entries in results:
+        for _, entry in entries:
+            s = score_entry(entry, feed_meta)
+            if best is None or s > best[0]:
+                best = (s, feed_meta, entry)
+    if best is None:
+        return None
+    return best[1], best[2]  # (feed_meta, entry)
 
 
 # ── フィードチェック共通処理 ──────────────────────────────
@@ -358,6 +394,30 @@ async def _post_morning_news(channel) -> None:
         print(f"[ERROR] 朝ニュース送信失敗: {e}")
         return
 
+    # ── 今日の注目1本 ──
+    spotlight = pick_spotlight(results)
+    if spotlight:
+        sp_feed, sp_entry = spotlight
+        sp_title = sp_entry.get("title", "タイトルなし")
+        sp_link  = sp_entry.get("link", "")
+        sp_summary = sp_entry.get("summary", sp_entry.get("description", ""))
+        import re
+        sp_summary = re.sub(r"<[^>]+>", "", sp_summary)
+        if len(sp_summary) > 300:
+            sp_summary = sp_summary[:300] + "…"
+        sp_embed = discord.Embed(
+            title=f"⭐ 今日の注目: {sp_title}",
+            url=sp_link,
+            description=sp_summary if sp_summary else None,
+            color=0xFFD700,
+            timestamp=datetime.now(timezone.utc),
+        )
+        sp_embed.set_footer(text=f"{sp_feed['name']} | AI・キーワードスコアリングによる自動選出")
+        try:
+            await channel.send(embed=sp_embed)
+        except discord.HTTPException:
+            pass
+
     now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now}] 🌅 朝のニュースチェック完了 - 新着 {total} 件をまとめて投稿")
 
@@ -388,7 +448,100 @@ async def morning_news_error(error):
         morning_news.restart()
 
 
+# ── Bot 本体 ──────────────────────────────────────────────
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+@bot.event
+async def on_ready():
+    print(f"✅ ログイン完了: {bot.user} (ID: {bot.user.id})")
+    print(f"📡 チャンネルID: {CHANNEL_ID}")
+    print(f"🌅 朝のニュース: 毎日 {MORNING_TIME.strftime('%H:%M')} JST")
+
+    # 起動時に朝のニュースを投稿
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
+        print("📰 起動時のニュースを投稿中...")
+        await _post_morning_news(channel)
+    else:
+        print(f"[ERROR] チャンネル {CHANNEL_ID} が見つかりません")
+
+    if not morning_news.is_running():
+        morning_news.start()
+        print("✅ morning_news タスク開始")
+    if not weekly_ranking.is_running():
+        weekly_ranking.start()
+        print("✅ weekly_ranking タスク開始")
+
+
+# ── 週刊ランキング (毎週日曜 9:00 JST) ────────────────────
+async def _post_weekly_ranking(channel) -> None:
+    """はてナBM ITホットエントリー TOP5 をランキング形式で投稿する"""
+    async with aiohttp.ClientSession() as session:
+        feed = await fetch_feed(session, "https://b.hatena.ne.jp/hotentry/it.rss")
+
+    if not feed or not feed.get("entries"):
+        print("[WARN] 週刊ランキング: エントリなし")
+        return
+
+    entries = feed.entries[:5]
+    week_start = (datetime.now(JST) - timedelta(days=6)).strftime("%m/%d")
+    week_end   = datetime.now(JST).strftime("%m/%d")
+
+    embed = discord.Embed(
+        title=f"🏆 今週のITニュース ランキング TOP5",
+        description=f"{week_start} 〜 {week_end}　|　はてなブックマーク ITホットエントリーより",
+        color=0x00A4DE,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    for i, entry in enumerate(entries):
+        title  = entry.get("title", "タイトルなし")
+        link   = entry.get("link", "")
+        bcount = getattr(entry, "hatena_bookmarkcount", "") or ""
+        count_str = f"　🔖 {bcount}件" if bcount else ""
+        embed.add_field(
+            name=f"{medals[i]}　{title}",
+            value=f"[{link}]({link}){count_str}",
+            inline=False,
+        )
+
+    embed.set_footer(text="毎週日曜 9:00 JST 配信")
+    try:
+        await channel.send(embed=embed)
+        now = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{now}] 🏆 週刊ランキング投稿完了")
+    except discord.HTTPException as e:
+        print(f"[ERROR] 週刊ランキング送信失敗: {e}")
+
+
+@tasks.loop(time=WEEKLY_TIME)
+async def weekly_ranking():
+    """毎週日曜 9:00 JST に週刊ランキングを投稿する"""
+    if datetime.now(JST).weekday() != 6:  # 6 = 日曜
+        return
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel is None:
+        return
+    await _post_weekly_ranking(channel)
+
+
+@weekly_ranking.before_loop
+async def before_weekly_ranking():
+    await bot.wait_until_ready()
+
+
 # ── コマンド ──────────────────────────────────────────────
+@bot.command(name="ranking")
+async def cmd_ranking(ctx):
+    """手動で週刊ランキングを表示する"""
+    await ctx.send("📥 ランキングを取得中…")
+    await _post_weekly_ranking(ctx.channel)
+
+
 @bot.command(name="news")
 async def cmd_news(ctx):
     """手動で最新記事をランダムに取得して投稿する"""
